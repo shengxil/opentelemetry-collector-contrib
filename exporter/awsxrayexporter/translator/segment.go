@@ -101,9 +101,9 @@ var (
 	writers = newWriterPool(2048)
 )
 
-// MakeSegmentDocumentString converts an OpenCensus Span to an X-Ray Segment and then serialzies to JSON
-func MakeSegmentDocumentString(span pdata.Span, resource pdata.Resource) (string, error) {
-	segment := MakeSegment(span, resource)
+// MakeSegmentDocumentString converts an OpenTelemetry Span to an X-Ray Segment and then serialzies to JSON
+func MakeSegmentDocumentString(span pdata.Span, resource pdata.Resource, attributeDataType string) (string, error) {
+	segment := MakeSegment(span, resource, attributeDataType)
 	w := writers.borrow()
 	if err := w.Encode(segment); err != nil {
 		return "", err
@@ -113,8 +113,8 @@ func MakeSegmentDocumentString(span pdata.Span, resource pdata.Resource) (string
 	return jsonStr, nil
 }
 
-// MakeSegment converts an OpenCensus Span to an X-Ray Segment
-func MakeSegment(span pdata.Span, resource pdata.Resource) Segment {
+// MakeSegment converts an OpenTelemetry Span to an X-Ray Segment
+func MakeSegment(span pdata.Span, resource pdata.Resource, attributeDataType string) Segment {
 	var (
 		traceID                                = convertToAmazonTraceID(span.TraceID())
 		startTime                              = timestampToFloatSeconds(span.StartTime())
@@ -126,7 +126,9 @@ func MakeSegment(span pdata.Span, resource pdata.Resource) Segment {
 		awsfiltered, aws                       = makeAws(causefiltered, resource)
 		service                                = makeService(resource)
 		sqlfiltered, sql                       = makeSQL(awsfiltered)
-		user, annotations                      = makeAnnotations(sqlfiltered)
+		user, xrayAttributes                   = makeXRayAttributes(sqlfiltered)
+		annotations                            map[string]interface{}
+		metadata                               map[string]map[string]interface{}
 		name                                   string
 		namespace                              string
 		segmentType                            string
@@ -202,6 +204,14 @@ func MakeSegment(span pdata.Span, resource pdata.Resource) Segment {
 		segmentType = "subsegment"
 	}
 
+	if (attributeDataType == "annotation") {
+		annotations = xrayAttributes
+	} else {
+		metadata = map[string]map[string]interface{}{
+			"default": xrayAttributes,
+		}
+	}
+
 	return Segment{
 		ID:          convertToAmazonSpanID(span.SpanID()),
 		TraceID:     traceID,
@@ -221,7 +231,7 @@ func MakeSegment(span pdata.Span, resource pdata.Resource) Segment {
 		Service:     service,
 		SQL:         sql,
 		Annotations: annotations,
-		Metadata:    nil,
+		Metadata:    metadata,
 		Type:        segmentType,
 	}
 }
@@ -333,7 +343,7 @@ func sanitizeAndTransferAnnotations(dest map[string]interface{}, src map[string]
 	}
 }
 
-func makeAnnotations(attributes map[string]string) (string, map[string]interface{}) {
+func makeXRayAttributes(attributes map[string]string) (string, map[string]interface{}) {
 	var (
 		result = map[string]interface{}{}
 		user   string
