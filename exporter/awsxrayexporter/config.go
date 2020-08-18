@@ -40,7 +40,7 @@ type Config struct {
 	// IAM role to upload segments to a different account.
 	RoleARN string `mapstructure:"role_arn"`
 	// Optional X-Ray attribute data type: https://docs.aws.amazon.com/xray/latest/devguide/xray-concepts.html#xray-concepts-annotations
-	// Defines how to translate the OpenTelemetry span attributes be translated.
+	// Defines which X-Ray data type will the OpenTelemetry span attributes be translated into.
 	// Valid values are "metadata" (default value) and "annotation".
 	AttributeDataType string `mapstructure:"attribute_data_type"`
 }
