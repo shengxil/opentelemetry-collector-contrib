@@ -102,8 +102,8 @@ var (
 )
 
 // MakeSegmentDocumentString converts an OpenTelemetry Span to an X-Ray Segment and then serialzies to JSON
-func MakeSegmentDocumentString(span pdata.Span, resource pdata.Resource, attributeDataType string) (string, error) {
-	segment := MakeSegment(span, resource, attributeDataType)
+func MakeSegmentDocumentString(span pdata.Span, resource pdata.Resource, indexedAttrs []string, indexAllAttrs bool) (string, error) {
+	segment := MakeSegment(span, resource, indexedAttrs, indexAllAttrs)
 	w := writers.borrow()
 	if err := w.Encode(segment); err != nil {
 		return "", err
@@ -114,7 +114,7 @@ func MakeSegmentDocumentString(span pdata.Span, resource pdata.Resource, attribu
 }
 
 // MakeSegment converts an OpenTelemetry Span to an X-Ray Segment
-func MakeSegment(span pdata.Span, resource pdata.Resource, attributeDataType string) Segment {
+func MakeSegment(span pdata.Span, resource pdata.Resource, indexedAttrs []string, indexAllAttrs bool) Segment {
 	var (
 		traceID                                = convertToAmazonTraceID(span.TraceID())
 		startTime                              = timestampToFloatSeconds(span.StartTime())
@@ -126,9 +126,7 @@ func MakeSegment(span pdata.Span, resource pdata.Resource, attributeDataType str
 		awsfiltered, aws                       = makeAws(causefiltered, resource)
 		service                                = makeService(resource)
 		sqlfiltered, sql                       = makeSQL(awsfiltered)
-		user, xrayAttributes                   = makeXRayAttributes(sqlfiltered)
-		annotations                            map[string]interface{}
-		metadata                               map[string]map[string]interface{}
+		user, annotations, metadata            = makeXRayAttributes(sqlfiltered, indexedAttrs, indexAllAttrs)
 		name                                   string
 		namespace                              string
 		segmentType                            string
@@ -202,14 +200,6 @@ func MakeSegment(span pdata.Span, resource pdata.Resource, attributeDataType str
 
 	if span.Kind() != pdata.SpanKindSERVER {
 		segmentType = "subsegment"
-	}
-
-	if (attributeDataType == "annotation") {
-		annotations = xrayAttributes
-	} else {
-		metadata = map[string]map[string]interface{}{
-			"default": xrayAttributes,
-		}
 	}
 
 	return Segment{
@@ -336,17 +326,12 @@ func timestampToFloatSeconds(ts pdata.TimestampUnixNano) float64 {
 	return float64(ts) / float64(time.Second)
 }
 
-func sanitizeAndTransferAnnotations(dest map[string]interface{}, src map[string]string) {
-	for key, value := range src {
-		key = fixAnnotationKey(key)
-		dest[key] = value
-	}
-}
-
-func makeXRayAttributes(attributes map[string]string) (string, map[string]interface{}) {
+func makeXRayAttributes(attributes map[string]string, indexedAttrs []string, indexAllAttrs bool) (
+	string, map[string]interface{}, map[string]map[string]interface{}) {
 	var (
-		result = map[string]interface{}{}
-		user   string
+		annotations     = map[string]interface{}{}
+		metadata        = map[string]map[string]interface{}{}
+		user            string
 	)
 	delete(attributes, semconventions.AttributeComponent)
 	userid, ok := attributes[semconventions.AttributeEnduserID]
@@ -354,12 +339,36 @@ func makeXRayAttributes(attributes map[string]string) (string, map[string]interf
 		user = userid
 		delete(attributes, semconventions.AttributeEnduserID)
 	}
-	sanitizeAndTransferAnnotations(result, attributes)
 
-	if len(result) == 0 {
-		return user, nil
+	if len(attributes) == 0 {
+		return user, nil, nil
 	}
-	return user, result
+
+	if indexAllAttrs {
+		for key, value := range attributes {
+			key = fixAnnotationKey(key)
+			annotations[key] = value
+		}
+	} else {
+		defaultMetadata := map[string]interface{}{}
+		for key, value := range attributes {
+			found := false
+			for _, indexedKey := range indexedAttrs {
+				if indexedKey == key {
+					found = true
+					key = fixAnnotationKey(key)
+					annotations[key] = value
+					break
+				}
+			}
+			if !found {
+				defaultMetadata[key] = value
+			}
+		}
+		metadata["default"] = defaultMetadata
+	}
+
+	return user, annotations, metadata
 }
 
 // fixSegmentName removes any invalid characters from the span name.  AWS X-Ray defines
