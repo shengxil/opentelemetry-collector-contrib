@@ -351,21 +351,22 @@ func makeXRayAttributes(attributes map[string]string, indexedAttrs []string, ind
 		}
 	} else {
 		defaultMetadata := map[string]interface{}{}
+		indexedKeys := map[string]interface{}{}
+		for _, name := range indexedAttrs {
+			indexedKeys[name] = true
+		}
+
 		for key, value := range attributes {
-			found := false
-			for _, indexedKey := range indexedAttrs {
-				if indexedKey == key {
-					found = true
-					key = fixAnnotationKey(key)
-					annotations[key] = value
-					break
-				}
-			}
-			if !found {
+			if _, ok := indexedKeys[key]; ok {
+				key = fixAnnotationKey(key)
+				annotations[key] = value
+			} else {
 				defaultMetadata[key] = value
 			}
 		}
-		metadata["default"] = defaultMetadata
+		if len(defaultMetadata) > 0 {
+			metadata["default"] = defaultMetadata
+		}
 	}
 
 	return user, annotations, metadata
